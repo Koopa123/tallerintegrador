@@ -1,0 +1,7 @@
+env/
+.env
+__pycache__/
+*.pyc
+videos_entrada/
+videos_salida/
+frames_referencia/
