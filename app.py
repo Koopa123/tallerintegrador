@@ -4,9 +4,17 @@ from database import (
     listar_presets,
     obtener_preset,
     actualizar_zonas_preset,
-    eliminar_preset
+    eliminar_preset,
+    crear_usuario,
+    obtener_usuario_por_email,
 )
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from auth import (
+    hashear_password,
+    verificar_password,
+    crear_token,
+    requerir_auth,
+)
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
@@ -14,6 +22,9 @@ import shutil
 import os
 import cv2
 import uuid
+
+from database import crear_usuario, obtener_usuario_por_email
+from psycopg2.errors import UniqueViolation
 
 from detector import generar_stream_video
 
@@ -36,7 +47,17 @@ os.makedirs(CARPETA_FRAMES, exist_ok=True)
 
 class ZonasRequest(BaseModel):
     zonas: list
+    
 
+class RegistroRequest(BaseModel):
+    nombre: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 def limpiar_carpeta(carpeta, max_archivos=5):
     archivos = [
@@ -54,6 +75,63 @@ def limpiar_carpeta(carpeta, max_archivos=5):
 def inicio():
     return {"mensaje": "API de detección de aglomeraciones funcionando"}
 
+# ============================================================
+# AUTENTICACIÓN
+# ============================================================
+
+@app.post("/auth/registro")
+def registro(data: RegistroRequest):
+    if len(data.password) < 6:
+        raise HTTPException(400, "La contraseña debe tener al menos 6 caracteres")
+
+    if "@" not in data.email:
+        raise HTTPException(400, "Email inválido")
+
+    password_hash = hashear_password(data.password)
+
+    try:
+        usuario = crear_usuario(data.nombre, data.email, password_hash)
+    except UniqueViolation:
+        raise HTTPException(409, "Ese email ya está registrado")
+    except Exception as e:
+        raise HTTPException(500, f"Error creando usuario: {str(e)}")
+
+    user_id, nombre, email = usuario
+    token = crear_token(user_id, email)
+
+    return {
+        "token": token,
+        "usuario": {"id": user_id, "nombre": nombre, "email": email}
+    }
+
+
+@app.post("/auth/login")
+def login(data: LoginRequest):
+    usuario = obtener_usuario_por_email(data.email)
+    if not usuario:
+        raise HTTPException(401, "Email o contraseña incorrectos")
+
+    user_id, nombre, email, password_hash = usuario
+
+    if not verificar_password(data.password, password_hash):
+        raise HTTPException(401, "Email o contraseña incorrectos")
+
+    token = crear_token(user_id, email)
+
+    return {
+        "token": token,
+        "usuario": {"id": user_id, "nombre": nombre, "email": email}
+    }
+
+
+@app.get("/auth/me")
+def yo(payload: dict = Depends(requerir_auth)):
+    """Endpoint para que el frontend valide si el token sigue siendo válido."""
+    return {
+        "id": int(payload["sub"]),
+        "email": payload["email"],
+    }
+
 
 # ============================================================
 # PRESETS
@@ -62,7 +140,8 @@ def inicio():
 @app.post("/presets")
 async def crear_preset_endpoint(
     nombre: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    _: dict = Depends(requerir_auth)   # ← protegido
 ):
     preset_uuid = str(uuid.uuid4())
     ruta_video_temp = os.path.join(CARPETA_VIDEOS, f"ref_{preset_uuid}.mp4")
@@ -100,7 +179,9 @@ async def crear_preset_endpoint(
 
 
 @app.get("/presets")
-def listar_presets_endpoint():
+def listar_presets_endpoint(
+    _: dict = Depends(requerir_auth)   # ← protegido
+):
     presets = listar_presets()
     return {
         "presets": [
@@ -117,7 +198,10 @@ def listar_presets_endpoint():
 
 
 @app.get("/presets/{preset_id}")
-def obtener_preset_endpoint(preset_id: int):
+def obtener_preset_endpoint(
+    preset_id: int,
+    _: dict = Depends(requerir_auth)   # ← protegido
+):
     preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
@@ -132,7 +216,11 @@ def obtener_preset_endpoint(preset_id: int):
 
 
 @app.put("/presets/{preset_id}/zonas")
-def actualizar_zonas_endpoint(preset_id: int, data: ZonasRequest):
+def actualizar_zonas_endpoint(
+    preset_id: int,
+    data: ZonasRequest,
+    _: dict = Depends(requerir_auth)   # ← protegido
+):
     preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
@@ -142,7 +230,10 @@ def actualizar_zonas_endpoint(preset_id: int, data: ZonasRequest):
 
 
 @app.delete("/presets/{preset_id}")
-def eliminar_preset_endpoint(preset_id: int):
+def eliminar_preset_endpoint(
+    preset_id: int,
+    _: dict = Depends(requerir_auth)   # ← protegido
+):
     preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
@@ -157,6 +248,7 @@ def eliminar_preset_endpoint(preset_id: int):
 
 @app.get("/presets/{preset_id}/frame")
 def obtener_frame_preset(preset_id: int):
+    # ← SIN proteger (se carga como <img src>, no acepta headers)
     preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
@@ -174,7 +266,8 @@ def obtener_frame_preset(preset_id: int):
 @app.post("/analisis")
 async def iniciar_analisis(
     preset_id: int = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    _: dict = Depends(requerir_auth)   # ← protegido
 ):
     preset = obtener_preset(preset_id)
     if not preset:
@@ -197,6 +290,7 @@ async def iniciar_analisis(
 
 @app.get("/analisis/stream/{nombre_video}")
 def stream_analisis(nombre_video: str, preset_id: int, nombre_original: str = None):
+    # ← SIN proteger (se carga como <img src> stream, no acepta headers)
     preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
@@ -221,7 +315,9 @@ def stream_analisis(nombre_video: str, preset_id: int, nombre_original: str = No
 
 
 @app.get("/analisis")
-def listar_analisis_endpoint():
+def listar_analisis_endpoint(
+    _: dict = Depends(requerir_auth)   # ← protegido
+):
     datos = listar_analisis()
     return {
         "analisis": [

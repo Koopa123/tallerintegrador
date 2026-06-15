@@ -134,3 +134,38 @@ def eliminar_preset(preset_id):
     conexion.commit()
     cursor.close()
     conexion.close()
+
+# ============================================================
+# USUARIOS
+# ============================================================
+
+def crear_usuario(nombre, email, password_hash):
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO usuarios (nombre, email, password_hash)
+            VALUES (%s, %s, %s)
+            RETURNING id, nombre, email
+        """, (nombre, email, password_hash))
+        usuario = cursor.fetchone()
+        conexion.commit()
+        return usuario  # (id, nombre, email)
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+def obtener_usuario_por_email(email):
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, nombre, email, password_hash
+            FROM usuarios
+            WHERE email = %s
+        """, (email,))
+        return cursor.fetchone()  # (id, nombre, email, password_hash) o None
+    finally:
+        cursor.close()
+        conexion.close()
