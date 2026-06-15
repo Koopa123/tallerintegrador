@@ -5,3 +5,4 @@ __pycache__/
 videos_entrada/
 videos_salida/
 frames_referencia/
+venv/

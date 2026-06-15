@@ -191,12 +191,12 @@ async def iniciar_analisis(
     return {
         "mensaje": "Video subido, iniciando análisis",
         "nombre_video": file.filename,
-        "stream_url": f"/analisis/stream/{nombre_unico}?preset_id={preset_id}"
+        "stream_url": f"/analisis/stream/{nombre_unico}?preset_id={preset_id}&nombre_original={file.filename}"
     }
 
 
 @app.get("/analisis/stream/{nombre_video}")
-def stream_analisis(nombre_video: str, preset_id: int):
+def stream_analisis(nombre_video: str, preset_id: int, nombre_original: str = None):
     preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
@@ -211,7 +211,7 @@ def stream_analisis(nombre_video: str, preset_id: int):
     return StreamingResponse(
         generar_stream_video(
             ruta_video,
-            file.filename if False else nombre_video,
+            nombre_original or nombre_video,
             zonas=zonas,
             preset_id=preset_id,
             preset_nombre=preset_nombre
