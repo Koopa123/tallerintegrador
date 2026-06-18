@@ -2,9 +2,30 @@ import cv2
 import math
 from ultralytics import YOLO
 
-DISTANCIA_AGRUPACION = 100
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
 CONFIANZA_MINIMA = 0.50
 
+# Fallback si no hay personas suficientes para estimar
+# una distancia adaptativa basada en el ancho de las cajas.
+DISTANCIA_AGRUPACION_FALLBACK = 100
+
+# Factor multiplicador del ancho promedio de bounding box.
+# Si el ancho promedio de una persona es ~80px en el video,
+# se consideran "del mismo grupo" si sus centros están a
+# menos de 80 * 1.5 = 120px. Esto se auto-ajusta al zoom
+# y resolución del video.
+FACTOR_DISTANCIA_AGRUPACION = 1.5
+
+# Umbrales de aglomeración (cuántas personas en el grupo mayor)
+UMBRAL_MEDIO = 4   # de 2 a 4 personas → MEDIO
+UMBRAL_ALTO = 6    # 6 o más → ALTO
+
+# ============================================================
+# CARGA DEL MODELO
+# ============================================================
 
 def cargar_modelo():
     return YOLO("yolov8n.pt")
@@ -12,6 +33,10 @@ def cargar_modelo():
 
 modelo = cargar_modelo()
 
+
+# ============================================================
+# DETECCIÓN
+# ============================================================
 
 def esta_en_zona_ignorada(x1, y1, x2, y2, zonas):
     centro_x = int((x1 + x2) / 2)
@@ -40,15 +65,21 @@ def detectar_personas(frame, zonas):
 
                 centro_x = int((x1 + x2) / 2)
                 centro_y = int((y1 + y2) / 2)
+                ancho = x2 - x1
 
                 personas.append({
                     "bbox": (x1, y1, x2, y2),
                     "centro": (centro_x, centro_y),
-                    "confianza": confianza
+                    "confianza": confianza,
+                    "ancho": ancho,
                 })
 
     return personas
 
+
+# ============================================================
+# AGRUPACIÓN
+# ============================================================
 
 def calcular_distancia(p1, p2):
     x1, y1 = p1
@@ -56,7 +87,27 @@ def calcular_distancia(p1, p2):
     return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def agrupar_personas(personas):
+def calcular_distancia_adaptativa(personas):
+    """
+    Calcula el umbral de distancia para agrupar personas,
+    basado en el ancho promedio de las cajas detectadas.
+
+    Esto hace que el agrupamiento se adapte automáticamente al
+    zoom y resolución del video, en lugar de depender de un
+    número fijo de píxeles.
+    """
+    if len(personas) < 2:
+        return DISTANCIA_AGRUPACION_FALLBACK
+
+    anchos = [p["ancho"] for p in personas if p["ancho"] > 0]
+    if not anchos:
+        return DISTANCIA_AGRUPACION_FALLBACK
+
+    ancho_promedio = sum(anchos) / len(anchos)
+    return ancho_promedio * FACTOR_DISTANCIA_AGRUPACION
+
+
+def agrupar_personas(personas, distancia_umbral):
     grupos = []
     visitados = set()
 
@@ -79,7 +130,7 @@ def agrupar_personas(personas):
                         persona_actual["centro"],
                         personas[j]["centro"]
                     )
-                    if distancia <= DISTANCIA_AGRUPACION:
+                    if distancia <= distancia_umbral:
                         visitados.add(j)
                         cola.append(j)
 
@@ -94,14 +145,24 @@ def obtener_grupo_mas_grande(grupos):
     return max(len(grupo) for grupo in grupos)
 
 
+# ============================================================
+# CLASIFICACIÓN
+# ============================================================
+
 def clasificar_aglomeracion(grupo_mas_grande):
     if grupo_mas_grande <= 1:
         return "BAJO", (0, 255, 0)
-    elif grupo_mas_grande <= 3:
+    elif grupo_mas_grande < UMBRAL_MEDIO:
+        return "BAJO", (0, 255, 0)
+    elif grupo_mas_grande < UMBRAL_ALTO:
         return "MEDIO", (0, 255, 255)
     else:
         return "ALTO", (0, 0, 255)
 
+
+# ============================================================
+# DIBUJO
+# ============================================================
 
 def mostrar_zonas(frame, zonas):
     for zx1, zy1, zx2, zy2 in zonas:
@@ -120,7 +181,7 @@ def dibujar_personas(frame, personas):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
 
-def dibujar_grupos(frame, personas, grupos):
+def dibujar_grupos(frame, personas, grupos, distancia_umbral):
     for grupo in grupos:
         if len(grupo) <= 1:
             continue
@@ -130,9 +191,13 @@ def dibujar_grupos(frame, personas, grupos):
         for i in range(len(puntos)):
             for j in range(i + 1, len(puntos)):
                 distancia = calcular_distancia(puntos[i], puntos[j])
-                if distancia <= DISTANCIA_AGRUPACION:
+                if distancia <= distancia_umbral:
                     cv2.line(frame, puntos[i], puntos[j], (255, 255, 0), 1)
 
+
+# ============================================================
+# STREAM PRINCIPAL
+# ============================================================
 
 def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_id=None, preset_nombre=None):
     from database import guardar_analisis
@@ -145,61 +210,73 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
 
     personas_maximas = 0
     grupo_mayor_maximo = 0
-    nivel_final = "BAJO"
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        personas = detectar_personas(frame, zonas)
-        grupos = agrupar_personas(personas)
-        grupo_mas_grande = obtener_grupo_mas_grande(grupos)
+            personas = detectar_personas(frame, zonas)
 
-        nivel_aglomeracion, color_aglomeracion = clasificar_aglomeracion(grupo_mas_grande)
+            # Distancia de agrupación adaptativa según tamaño de las personas
+            distancia_umbral = calcular_distancia_adaptativa(personas)
 
-        personas_maximas = max(personas_maximas, len(personas))
-        grupo_mayor_maximo = max(grupo_mayor_maximo, grupo_mas_grande)
-        nivel_final = nivel_aglomeracion
+            grupos = agrupar_personas(personas, distancia_umbral)
+            grupo_mas_grande = obtener_grupo_mas_grande(grupos)
 
-        dibujar_personas(frame, personas)
-        dibujar_grupos(frame, personas, grupos)
-        mostrar_zonas(frame, zonas)
+            # Nivel del frame actual (solo para mostrar en pantalla)
+            nivel_aglomeracion, color_aglomeracion = clasificar_aglomeracion(grupo_mas_grande)
 
-        if preset_nombre:
-            cv2.putText(frame, f"Preset: {preset_nombre}", (10, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            personas_maximas = max(personas_maximas, len(personas))
+            grupo_mayor_maximo = max(grupo_mayor_maximo, grupo_mas_grande)
 
-        cv2.putText(frame, f"Personas detectadas: {len(personas)}", (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Grupo mayor: {grupo_mas_grande}", (10, 85),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        cv2.putText(frame, f"Aglomeracion: {nivel_aglomeracion}", (10, 115),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_aglomeracion, 2)
+            dibujar_personas(frame, personas)
+            dibujar_grupos(frame, personas, grupos, distancia_umbral)
+            mostrar_zonas(frame, zonas)
 
-        if nivel_aglomeracion == "ALTO":
-            cv2.putText(frame, "ALERTA: AGLOMERACION DETECTADA", (10, 150),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            if preset_nombre:
+                cv2.putText(frame, f"Preset: {preset_nombre}", (10, 25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
-        ok, buffer = cv2.imencode(".jpg", frame)
-        if not ok:
-            continue
+            cv2.putText(frame, f"Personas detectadas: {len(personas)}", (10, 55),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame, f"Grupo mayor: {grupo_mas_grande}", (10, 85),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            cv2.putText(frame, f"Aglomeracion: {nivel_aglomeracion}", (10, 115),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_aglomeracion, 2)
 
-        frame_bytes = buffer.tobytes()
+            if nivel_aglomeracion == "ALTO":
+                cv2.putText(frame, "ALERTA: AGLOMERACION DETECTADA", (10, 150),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" +
-            frame_bytes +
-            b"\r\n"
-        )
+            ok, buffer = cv2.imencode(".jpg", frame)
+            if not ok:
+                continue
 
-    cap.release()
+            frame_bytes = buffer.tobytes()
 
-    guardar_analisis(
-        nombre_video,
-        personas_maximas,
-        grupo_mayor_maximo,
-        nivel_final,
-        preset_id=preset_id
-    )
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" +
+                frame_bytes +
+                b"\r\n"
+            )
+    finally:
+        # Esto se ejecuta SIEMPRE: tanto si el video terminó normalmente
+        # como si el cliente se desconectó a mitad del stream.
+        cap.release()
+
+        # Calcular el nivel final desde el pico real, no del último frame
+        nivel_final, _ = clasificar_aglomeracion(grupo_mayor_maximo)
+
+        try:
+            guardar_analisis(
+                nombre_video,
+                personas_maximas,
+                grupo_mayor_maximo,
+                nivel_final,
+                preset_id=preset_id
+            )
+        except Exception as e:
+            print(f"[WARN] No se pudo guardar el análisis: {e}")
