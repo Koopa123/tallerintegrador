@@ -279,8 +279,6 @@ async def iniciar_analisis(
     with open(ruta_entrada, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    limpiar_carpeta(CARPETA_VIDEOS, max_archivos=5)
-
     return {
         "mensaje": "Video subido, iniciando análisis",
         "nombre_video": file.filename,

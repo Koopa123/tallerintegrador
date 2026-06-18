@@ -1,3 +1,4 @@
+import os
 import cv2
 import math
 from ultralytics import YOLO
@@ -28,7 +29,7 @@ UMBRAL_ALTO = 6    # 6 o más → ALTO
 # ============================================================
 
 def cargar_modelo():
-    return YOLO("yolov8n.pt")
+    return YOLO("yolov8s.pt")
 
 
 modelo = cargar_modelo()
@@ -263,13 +264,19 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
                 b"\r\n"
             )
     finally:
-        # Esto se ejecuta SIEMPRE: tanto si el video terminó normalmente
-        # como si el cliente se desconectó a mitad del stream.
         cap.release()
 
-        # Calcular el nivel final desde el pico real, no del último frame
+        # Borrar el video después de procesarlo (ya no se necesita)
+        try:
+            if os.path.exists(ruta_entrada):
+                os.remove(ruta_entrada)
+        except Exception as e:
+            print(f"[WARN] No se pudo borrar {ruta_entrada}: {e}")
+
+        # Calcular nivel final desde el pico real, no del último frame
         nivel_final, _ = clasificar_aglomeracion(grupo_mayor_maximo)
 
+        # Guardar el análisis en la base de datos
         try:
             guardar_analisis(
                 nombre_video,
