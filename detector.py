@@ -21,7 +21,9 @@ DISTANCIA_AGRUPACION_FALLBACK = 100
 FACTOR_DISTANCIA_AGRUPACION = 1.5
 
 # Umbrales de aglomeración (cuántas personas en el grupo mayor)
-UMBRAL_MEDIO = 4   # de 2 a 4 personas → MEDIO
+# clasificar_aglomeracion() de abajo: 2-3 → BAJO, 4-5 → MEDIO, 6+ → ALTO
+# (mismo criterio que benchmark/vision_core/modelos/aglomeracion.py)
+UMBRAL_MEDIO = 4   # a partir de 4 personas → MEDIO
 UMBRAL_ALTO = 6    # 6 o más → ALTO
 
 # ============================================================
@@ -200,7 +202,7 @@ def dibujar_grupos(frame, personas, grupos, distancia_umbral):
 # STREAM PRINCIPAL
 # ============================================================
 
-def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_id=None, preset_nombre=None):
+def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_id=None, preset_nombre=None, user_id=None):
     from database import guardar_analisis
 
     zonas = zonas or []
@@ -283,6 +285,7 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
                 personas_maximas,
                 grupo_mayor_maximo,
                 nivel_final,
+                user_id=user_id,
                 preset_id=preset_id
             )
         except Exception as e:

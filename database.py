@@ -14,126 +14,150 @@ def obtener_conexion():
 # ANÁLISIS
 # ============================================================
 
-def guardar_analisis(nombre_video, personas_maximas, grupo_mayor_maximo, nivel_final, preset_id=None):
+def guardar_analisis(nombre_video, personas_maximas, grupo_mayor_maximo, nivel_final, user_id, preset_id=None):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
-
-    cursor.execute("""
-        INSERT INTO analisis (
+    try:
+        cursor.execute("""
+            INSERT INTO analisis (
+                nombre_video,
+                personas_maximas,
+                grupo_mayor_maximo,
+                nivel_final,
+                preset_id,
+                user_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
             nombre_video,
             personas_maximas,
             grupo_mayor_maximo,
             nivel_final,
-            preset_id
-        )
-        VALUES (%s, %s, %s, %s, %s)
-    """, (
-        nombre_video,
-        personas_maximas,
-        grupo_mayor_maximo,
-        nivel_final,
-        preset_id
-    ))
-
-    conexion.commit()
-    cursor.close()
-    conexion.close()
+            preset_id,
+            user_id
+        ))
+        conexion.commit()
+    finally:
+        cursor.close()
+        conexion.close()
 
 
-def listar_analisis():
+def listar_analisis(user_id):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
-
-    cursor.execute("""
-        SELECT a.id, a.nombre_video, a.personas_maximas, a.grupo_mayor_maximo,
-               a.nivel_final, a.fecha, p.nombre
-        FROM analisis a
-        LEFT JOIN presets p ON a.preset_id = p.id
-        ORDER BY a.fecha DESC
-    """)
-
-    datos = cursor.fetchall()
-    cursor.close()
-    conexion.close()
-    return datos
+    try:
+        cursor.execute("""
+            SELECT a.id, a.nombre_video, a.personas_maximas, a.grupo_mayor_maximo,
+                   a.nivel_final, a.fecha, p.nombre
+            FROM analisis a
+            LEFT JOIN presets p ON a.preset_id = p.id
+            WHERE a.user_id = %s
+            ORDER BY a.fecha DESC
+        """, (user_id,))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conexion.close()
 
 
 # ============================================================
 # PRESETS DE ZONAS
 # ============================================================
 
-def crear_preset(nombre, frame_path, zonas):
+def crear_preset(nombre, frame_path, zonas, user_id):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO presets (nombre, frame_path, zonas, user_id)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        """, (nombre, frame_path, json.dumps(zonas), user_id))
 
-    cursor.execute("""
-        INSERT INTO presets (nombre, frame_path, zonas)
-        VALUES (%s, %s, %s)
-        RETURNING id
-    """, (nombre, frame_path, json.dumps(zonas)))
-
-    preset_id = cursor.fetchone()[0]
-    conexion.commit()
-    cursor.close()
-    conexion.close()
-    return preset_id
+        preset_id = cursor.fetchone()[0]
+        conexion.commit()
+        return preset_id
+    finally:
+        cursor.close()
+        conexion.close()
 
 
-def listar_presets():
+def listar_presets(user_id):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, nombre, frame_path, zonas, fecha_creacion
+            FROM presets
+            WHERE user_id = %s
+            ORDER BY fecha_creacion DESC
+        """, (user_id,))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conexion.close()
 
-    cursor.execute("""
-        SELECT id, nombre, frame_path, zonas, fecha_creacion
-        FROM presets
-        ORDER BY fecha_creacion DESC
-    """)
 
-    datos = cursor.fetchall()
-    cursor.close()
-    conexion.close()
-    return datos
-
-
-def obtener_preset(preset_id):
+def obtener_preset(preset_id, user_id):
+    """Devuelve el preset solo si pertenece a user_id (para rutas autenticadas)."""
     conexion = obtener_conexion()
     cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, nombre, frame_path, zonas, fecha_creacion
+            FROM presets
+            WHERE id = %s AND user_id = %s
+        """, (preset_id, user_id))
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conexion.close()
 
-    cursor.execute("""
-        SELECT id, nombre, frame_path, zonas, fecha_creacion
-        FROM presets
-        WHERE id = %s
-    """, (preset_id,))
 
-    fila = cursor.fetchone()
-    cursor.close()
-    conexion.close()
-    return fila
-
-
-def actualizar_zonas_preset(preset_id, zonas):
+def obtener_preset_publico(preset_id):
+    """
+    Devuelve el preset sin filtrar por dueño. Uso exclusivo del endpoint
+    de frame (/presets/{id}/frame), que se carga como <img src> y por lo
+    tanto no puede mandar el header Authorization.
+    """
     conexion = obtener_conexion()
     cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, nombre, frame_path, zonas, fecha_creacion
+            FROM presets
+            WHERE id = %s
+        """, (preset_id,))
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conexion.close()
 
-    cursor.execute("""
-        UPDATE presets
-        SET zonas = %s
-        WHERE id = %s
-    """, (json.dumps(zonas), preset_id))
 
-    conexion.commit()
-    cursor.close()
-    conexion.close()
-
-
-def eliminar_preset(preset_id):
+def actualizar_zonas_preset(preset_id, zonas, user_id):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            UPDATE presets
+            SET zonas = %s
+            WHERE id = %s AND user_id = %s
+        """, (json.dumps(zonas), preset_id, user_id))
+        conexion.commit()
+    finally:
+        cursor.close()
+        conexion.close()
 
-    cursor.execute("DELETE FROM presets WHERE id = %s", (preset_id,))
-    conexion.commit()
-    cursor.close()
-    conexion.close()
+
+def eliminar_preset(preset_id, user_id):
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("DELETE FROM presets WHERE id = %s AND user_id = %s", (preset_id, user_id))
+        conexion.commit()
+    finally:
+        cursor.close()
+        conexion.close()
 
 # ============================================================
 # USUARIOS

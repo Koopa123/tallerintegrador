@@ -3,6 +3,7 @@ from database import (
     crear_preset,
     listar_presets,
     obtener_preset,
+    obtener_preset_publico,
     actualizar_zonas_preset,
     eliminar_preset,
     crear_usuario,
@@ -13,11 +14,14 @@ from auth import (
     verificar_password,
     crear_token,
     requerir_auth,
+    crear_token_stream,
+    verificar_token_stream,
 )
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
+from pathlib import Path
 import shutil
 import os
 import cv2
@@ -33,7 +37,10 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # La autenticación es 100% por Bearer token, no por cookies, así que no
+    # hace falta allow_credentials (y combinarlo con origin "*" es una
+    # bandera típica de escáneres de seguridad sin beneficio real acá).
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -138,11 +145,12 @@ def yo(payload: dict = Depends(requerir_auth)):
 # ============================================================
 
 @app.post("/presets")
-async def crear_preset_endpoint(
+def crear_preset_endpoint(
     nombre: str = Form(...),
     file: UploadFile = File(...),
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
+    user_id = int(payload["sub"])
     preset_uuid = str(uuid.uuid4())
     ruta_video_temp = os.path.join(CARPETA_VIDEOS, f"ref_{preset_uuid}.mp4")
     nombre_frame = f"frame_{preset_uuid}.jpg"
@@ -164,7 +172,7 @@ async def crear_preset_endpoint(
     cv2.imwrite(ruta_frame, frame)
 
     try:
-        preset_id = crear_preset(nombre=nombre, frame_path=nombre_frame, zonas=[])
+        preset_id = crear_preset(nombre=nombre, frame_path=nombre_frame, zonas=[], user_id=user_id)
     except Exception as e:
         if os.path.exists(ruta_frame):
             os.remove(ruta_frame)
@@ -180,9 +188,9 @@ async def crear_preset_endpoint(
 
 @app.get("/presets")
 def listar_presets_endpoint(
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
-    presets = listar_presets()
+    presets = listar_presets(user_id=int(payload["sub"]))
     return {
         "presets": [
             {
@@ -200,9 +208,9 @@ def listar_presets_endpoint(
 @app.get("/presets/{preset_id}")
 def obtener_preset_endpoint(
     preset_id: int,
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
-    preset = obtener_preset(preset_id)
+    preset = obtener_preset(preset_id, user_id=int(payload["sub"]))
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -219,22 +227,24 @@ def obtener_preset_endpoint(
 def actualizar_zonas_endpoint(
     preset_id: int,
     data: ZonasRequest,
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
-    preset = obtener_preset(preset_id)
+    user_id = int(payload["sub"])
+    preset = obtener_preset(preset_id, user_id=user_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
-    actualizar_zonas_preset(preset_id, data.zonas)
+    actualizar_zonas_preset(preset_id, data.zonas, user_id=user_id)
     return {"mensaje": "Zonas actualizadas", "zonas": data.zonas}
 
 
 @app.delete("/presets/{preset_id}")
 def eliminar_preset_endpoint(
     preset_id: int,
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
-    preset = obtener_preset(preset_id)
+    user_id = int(payload["sub"])
+    preset = obtener_preset(preset_id, user_id=user_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -242,14 +252,14 @@ def eliminar_preset_endpoint(
     if os.path.exists(ruta_frame):
         os.remove(ruta_frame)
 
-    eliminar_preset(preset_id)
+    eliminar_preset(preset_id, user_id=user_id)
     return {"mensaje": "Preset eliminado"}
 
 
 @app.get("/presets/{preset_id}/frame")
 def obtener_frame_preset(preset_id: int):
     # ← SIN proteger (se carga como <img src>, no acepta headers)
-    preset = obtener_preset(preset_id)
+    preset = obtener_preset_publico(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -264,32 +274,47 @@ def obtener_frame_preset(preset_id: int):
 # ============================================================
 
 @app.post("/analisis")
-async def iniciar_analisis(
+def iniciar_analisis(
     preset_id: int = Form(...),
     file: UploadFile = File(...),
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
-    preset = obtener_preset(preset_id)
+    user_id = int(payload["sub"])
+    preset = obtener_preset(preset_id, user_id=user_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
-    nombre_unico = f"{uuid.uuid4()}_{file.filename}"
+    nombre_seguro = Path(file.filename).name
+    nombre_unico = f"{uuid.uuid4()}_{nombre_seguro}"
     ruta_entrada = os.path.join(CARPETA_VIDEOS, nombre_unico)
 
     with open(ruta_entrada, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    # El stream se consume como <img src>/stream, que no puede mandar el
+    # header Authorization: usamos un token de corta duración atado a
+    # este video, preset y usuario en vez de dejar la ruta sin protección.
+    token_stream = crear_token_stream(nombre_unico, preset_id, user_id)
+
     return {
         "mensaje": "Video subido, iniciando análisis",
         "nombre_video": file.filename,
-        "stream_url": f"/analisis/stream/{nombre_unico}?preset_id={preset_id}&nombre_original={file.filename}"
+        "stream_url": f"/analisis/stream/{nombre_unico}?preset_id={preset_id}&nombre_original={file.filename}&token={token_stream}"
     }
 
 
 @app.get("/analisis/stream/{nombre_video}")
-def stream_analisis(nombre_video: str, preset_id: int, nombre_original: str = None):
-    # ← SIN proteger (se carga como <img src> stream, no acepta headers)
-    preset = obtener_preset(preset_id)
+def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_original: str = None):
+    # nombre_video viene de la URL: se sanea para evitar path traversal.
+    nombre_video = Path(nombre_video).name
+
+    # No se puede usar requerir_auth (Bearer) porque esto se carga como
+    # <img src>/stream, así que validamos el token de un solo uso emitido
+    # por /analisis para este video+preset+usuario específicos.
+    payload_stream = verificar_token_stream(token, nombre_video, preset_id)
+    user_id = int(payload_stream["sub"])
+
+    preset = obtener_preset(preset_id, user_id=user_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -306,7 +331,8 @@ def stream_analisis(nombre_video: str, preset_id: int, nombre_original: str = No
             nombre_original or nombre_video,
             zonas=zonas,
             preset_id=preset_id,
-            preset_nombre=preset_nombre
+            preset_nombre=preset_nombre,
+            user_id=user_id
         ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
@@ -314,9 +340,9 @@ def stream_analisis(nombre_video: str, preset_id: int, nombre_original: str = No
 
 @app.get("/analisis")
 def listar_analisis_endpoint(
-    _: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← protegido
 ):
-    datos = listar_analisis()
+    datos = listar_analisis(user_id=int(payload["sub"]))
     return {
         "analisis": [
             {

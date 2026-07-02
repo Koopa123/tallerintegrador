@@ -52,3 +52,37 @@ def requerir_auth(
     Swagger muestra el botón Authorize gracias a HTTPBearer.
     """
     return verificar_token(credentials.credentials)
+
+
+STREAM_TOKEN_EXPIRE_MINUTOS = 5
+
+
+def crear_token_stream(nombre_video: str, preset_id: int, user_id: int) -> str:
+    """
+    Token de corta duración para el endpoint /analisis/stream, que se
+    consume como <img src>/stream y por lo tanto no puede mandar un
+    header Authorization. Solo autoriza ESE video y ESE preset puntual.
+    """
+    payload = {
+        "sub": str(user_id),
+        "nombre_video": nombre_video,
+        "preset_id": preset_id,
+        "tipo": "stream",
+        "exp": datetime.utcnow() + timedelta(minutes=STREAM_TOKEN_EXPIRE_MINUTOS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verificar_token_stream(token: str, nombre_video: str, preset_id: int) -> dict:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(401, "Token de stream inválido o expirado")
+
+    if payload.get("tipo") != "stream":
+        raise HTTPException(401, "Token de stream inválido")
+
+    if payload.get("nombre_video") != nombre_video or payload.get("preset_id") != preset_id:
+        raise HTTPException(401, "Token de stream no corresponde a este recurso")
+
+    return payload
