@@ -20,10 +20,12 @@ from auth import (
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 from pathlib import Path
+from typing import List, Tuple
 import shutil
 import os
+import re
 import cv2
 import uuid
 
@@ -47,14 +49,50 @@ app.add_middleware(
 
 CARPETA_VIDEOS = "videos_entrada"
 CARPETA_FRAMES = "frames_referencia"
+EXTENSIONES_VIDEO_VALIDAS = {".mp4", ".avi", ".mov", ".mkv"}
 
 os.makedirs(CARPETA_VIDEOS, exist_ok=True)
 os.makedirs(CARPETA_FRAMES, exist_ok=True)
 
 
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+NOMBRE_MAX_LARGO = 80
+BCRYPT_MAX_BYTES = 72  # bcrypt trunca (y passlib puede fallar) más allá de esto
+
+
 class ZonasRequest(BaseModel):
-    zonas: list
-    
+    # Cada zona es (x1, y1, x2, y2). Tipado y validado acá porque detector.py
+    # las desempaqueta como `for zx1, zy1, zx2, zy2 in zonas` sin chequeos:
+    # una zona mal formada rompería el stream de video a mitad de análisis.
+    zonas: List[Tuple[int, int, int, int]]
+    # Umbrales de aglomeración propios de este pasillo (antes eran constantes
+    # fijas en detector.py, iguales para todos los pasillos).
+    umbral_medio: int = 4
+    umbral_alto: int = 6
+
+    @field_validator("zonas")
+    @classmethod
+    def validar_zonas(cls, zonas):
+        for x1, y1, x2, y2 in zonas:
+            if x1 < 0 or y1 < 0 or x2 < 0 or y2 < 0:
+                raise ValueError("Las coordenadas de una zona no pueden ser negativas")
+            if x2 <= x1 or y2 <= y1:
+                raise ValueError("Cada zona debe cumplir x2 > x1 y y2 > y1")
+        return zonas
+
+    @field_validator("umbral_medio")
+    @classmethod
+    def validar_umbral_medio(cls, v):
+        if v < 2:
+            raise ValueError("El umbral medio debe ser al menos 2 personas")
+        return v
+
+    @model_validator(mode="after")
+    def validar_orden_umbrales(self):
+        if self.umbral_alto <= self.umbral_medio:
+            raise ValueError("El umbral alto debe ser mayor que el umbral medio")
+        return self
+
 
 class RegistroRequest(BaseModel):
     nombre: str
@@ -88,16 +126,28 @@ def inicio():
 
 @app.post("/auth/registro")
 def registro(data: RegistroRequest):
+    nombre = data.nombre.strip()
+    email = data.email.strip().lower()
+
+    if not nombre:
+        raise HTTPException(400, "El nombre no puede estar vacío")
+    if len(nombre) > NOMBRE_MAX_LARGO:
+        raise HTTPException(400, f"El nombre no puede superar los {NOMBRE_MAX_LARGO} caracteres")
+    if not re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ' -]+", nombre):
+        raise HTTPException(400, "El nombre solo puede contener letras y espacios")
+
+    if not EMAIL_REGEX.match(email):
+        raise HTTPException(400, "Email inválido")
+
     if len(data.password) < 6:
         raise HTTPException(400, "La contraseña debe tener al menos 6 caracteres")
-
-    if "@" not in data.email:
-        raise HTTPException(400, "Email inválido")
+    if len(data.password.encode("utf-8")) > BCRYPT_MAX_BYTES:
+        raise HTTPException(400, f"La contraseña no puede superar los {BCRYPT_MAX_BYTES} caracteres")
 
     password_hash = hashear_password(data.password)
 
     try:
-        usuario = crear_usuario(data.nombre, data.email, password_hash)
+        usuario = crear_usuario(nombre, email, password_hash)
     except UniqueViolation:
         raise HTTPException(409, "Ese email ya está registrado")
     except Exception as e:
@@ -114,7 +164,7 @@ def registro(data: RegistroRequest):
 
 @app.post("/auth/login")
 def login(data: LoginRequest):
-    usuario = obtener_usuario_por_email(data.email)
+    usuario = obtener_usuario_por_email(data.email.strip().lower())
     if not usuario:
         raise HTTPException(401, "Email o contraseña incorrectos")
 
@@ -147,29 +197,29 @@ def yo(payload: dict = Depends(requerir_auth)):
 @app.post("/presets")
 def crear_preset_endpoint(
     nombre: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),   # ← ya viene como imagen (frame extraído en el navegador)
     payload: dict = Depends(requerir_auth)   # ← protegido
 ):
+    nombre = nombre.strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre del pasillo no puede estar vacío")
+    if len(nombre) > NOMBRE_MAX_LARGO:
+        raise HTTPException(status_code=400, detail=f"El nombre no puede superar los {NOMBRE_MAX_LARGO} caracteres")
+
     user_id = int(payload["sub"])
     preset_uuid = str(uuid.uuid4())
-    ruta_video_temp = os.path.join(CARPETA_VIDEOS, f"ref_{preset_uuid}.mp4")
     nombre_frame = f"frame_{preset_uuid}.jpg"
     ruta_frame = os.path.join(CARPETA_FRAMES, nombre_frame)
 
-    with open(ruta_video_temp, "wb") as buffer:
+    with open(ruta_frame, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    cap = cv2.VideoCapture(ruta_video_temp)
-    ret, frame = cap.read()
-    cap.release()
-
-    if os.path.exists(ruta_video_temp):
-        os.remove(ruta_video_temp)
-
-    if not ret:
-        raise HTTPException(status_code=400, detail="No se pudo extraer el primer frame del video")
-
-    cv2.imwrite(ruta_frame, frame)
+    # El navegador ya recorta el primer frame, así que acá no hace falta
+    # tocar video: solo validamos que lo recibido sea una imagen legible.
+    if cv2.imread(ruta_frame) is None:
+        if os.path.exists(ruta_frame):
+            os.remove(ruta_frame)
+        raise HTTPException(status_code=400, detail="El archivo recibido no es una imagen válida")
 
     try:
         preset_id = crear_preset(nombre=nombre, frame_path=nombre_frame, zonas=[], user_id=user_id)
@@ -182,7 +232,9 @@ def crear_preset_endpoint(
         "id": preset_id,
         "nombre": nombre,
         "frame_url": f"/presets/{preset_id}/frame",
-        "zonas": []
+        "zonas": [],
+        "umbral_medio": 4,
+        "umbral_alto": 6,
     }
 
 
@@ -198,7 +250,9 @@ def listar_presets_endpoint(
                 "nombre": p[1],
                 "frame_url": f"/presets/{p[0]}/frame",
                 "zonas": p[3],
-                "fecha_creacion": p[4].isoformat() if p[4] else None
+                "fecha_creacion": p[4].isoformat() if p[4] else None,
+                "umbral_medio": p[5],
+                "umbral_alto": p[6],
             }
             for p in presets
         ]
@@ -219,7 +273,9 @@ def obtener_preset_endpoint(
         "nombre": preset[1],
         "frame_url": f"/presets/{preset_id}/frame",
         "zonas": preset[3],
-        "fecha_creacion": preset[4].isoformat() if preset[4] else None
+        "fecha_creacion": preset[4].isoformat() if preset[4] else None,
+        "umbral_medio": preset[5],
+        "umbral_alto": preset[6],
     }
 
 
@@ -234,8 +290,16 @@ def actualizar_zonas_endpoint(
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
-    actualizar_zonas_preset(preset_id, data.zonas, user_id=user_id)
-    return {"mensaje": "Zonas actualizadas", "zonas": data.zonas}
+    actualizar_zonas_preset(
+        preset_id, data.zonas, user_id=user_id,
+        umbral_medio=data.umbral_medio, umbral_alto=data.umbral_alto
+    )
+    return {
+        "mensaje": "Zonas actualizadas",
+        "zonas": data.zonas,
+        "umbral_medio": data.umbral_medio,
+        "umbral_alto": data.umbral_alto,
+    }
 
 
 @app.delete("/presets/{preset_id}")
@@ -285,6 +349,12 @@ def iniciar_analisis(
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
     nombre_seguro = Path(file.filename).name
+    if Path(nombre_seguro).suffix.lower() not in EXTENSIONES_VIDEO_VALIDAS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato de video no soportado. Usa: {', '.join(sorted(EXTENSIONES_VIDEO_VALIDAS))}"
+        )
+
     nombre_unico = f"{uuid.uuid4()}_{nombre_seguro}"
     ruta_entrada = os.path.join(CARPETA_VIDEOS, nombre_unico)
 
@@ -324,6 +394,8 @@ def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_origin
 
     zonas = preset[3]
     preset_nombre = preset[1]
+    umbral_medio = preset[5]
+    umbral_alto = preset[6]
 
     return StreamingResponse(
         generar_stream_video(
@@ -332,7 +404,9 @@ def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_origin
             zonas=zonas,
             preset_id=preset_id,
             preset_nombre=preset_nombre,
-            user_id=user_id
+            user_id=user_id,
+            umbral_medio=umbral_medio,
+            umbral_alto=umbral_alto,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
@@ -352,7 +426,9 @@ def listar_analisis_endpoint(
                 "grupo_mayor_maximo": fila[3],
                 "nivel_final": fila[4],
                 "fecha": fila[5].isoformat() if fila[5] else None,
-                "preset_nombre": fila[6]
+                "preset_nombre": fila[6],
+                "zona_alerta": fila[7],
+                "momento_alerta_seg": float(fila[8]) if fila[8] is not None else None,
             }
             for fila in datos
         ]

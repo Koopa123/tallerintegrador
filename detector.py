@@ -1,4 +1,5 @@
 import os
+import time
 import cv2
 import math
 from ultralytics import YOLO
@@ -148,19 +149,73 @@ def obtener_grupo_mas_grande(grupos):
     return max(len(grupo) for grupo in grupos)
 
 
+def obtener_personas_grupo_mas_grande(personas, grupos):
+    """Devuelve las personas (no solo el conteo) del grupo más numeroso."""
+    if not grupos:
+        return []
+    grupo = max(grupos, key=len)
+    return [personas[i] for i in grupo]
+
+
 # ============================================================
 # CLASIFICACIÓN
 # ============================================================
 
-def clasificar_aglomeracion(grupo_mas_grande):
+def clasificar_aglomeracion(grupo_mas_grande, umbral_medio=UMBRAL_MEDIO, umbral_alto=UMBRAL_ALTO):
     if grupo_mas_grande <= 1:
         return "BAJO", (0, 255, 0)
-    elif grupo_mas_grande < UMBRAL_MEDIO:
+    elif grupo_mas_grande < umbral_medio:
         return "BAJO", (0, 255, 0)
-    elif grupo_mas_grande < UMBRAL_ALTO:
+    elif grupo_mas_grande < umbral_alto:
         return "MEDIO", (0, 255, 255)
     else:
         return "ALTO", (0, 0, 255)
+
+
+# ============================================================
+# ZONA Y MOMENTO DE LA ALERTA
+# ============================================================
+# Misma idea que obtenerZonaPromedio()/obtenerZona() en Realtime.jsx del
+# frontend, para que la alerta de un video pregrabado sea igual de útil
+# que la de la cámara en vivo: no solo "hay aglomeración", sino dónde y
+# en qué momento del video.
+
+def calcular_zona(personas, frame_width, frame_height):
+    if not personas or not frame_width or not frame_height:
+        return "Vista actual"
+
+    suma_x = sum(p["centro"][0] for p in personas)
+    suma_y = sum(p["centro"][1] for p in personas)
+    cx = suma_x / len(personas)
+    cy = suma_y / len(personas)
+
+    if cy < frame_height / 3:
+        vertical = "superior"
+    elif cy > frame_height * 2 / 3:
+        vertical = "inferior"
+    else:
+        vertical = "centro"
+
+    if cx < frame_width / 3:
+        horizontal = "izquierda"
+    elif cx > frame_width * 2 / 3:
+        horizontal = "derecha"
+    else:
+        horizontal = "centro"
+
+    if vertical == "centro" and horizontal == "centro":
+        return "Centro"
+    if vertical == "centro":
+        return f"Centro {horizontal}"
+    if horizontal == "centro":
+        return f"{vertical} centro"
+    return f"{vertical} {horizontal}"
+
+
+def formatear_momento(segundos):
+    minutos = int(segundos) // 60
+    segs = int(segundos) % 60
+    return f"{minutos:02d}:{segs:02d}"
 
 
 # ============================================================
@@ -202,7 +257,8 @@ def dibujar_grupos(frame, personas, grupos, distancia_umbral):
 # STREAM PRINCIPAL
 # ============================================================
 
-def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_id=None, preset_nombre=None, user_id=None):
+def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_id=None, preset_nombre=None,
+                          user_id=None, umbral_medio=UMBRAL_MEDIO, umbral_alto=UMBRAL_ALTO):
     from database import guardar_analisis
 
     zonas = zonas or []
@@ -214,11 +270,37 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
     personas_maximas = 0
     grupo_mayor_maximo = 0
 
+    # Zona y momento del PRIMER frame en que se llega a ALTO, para guardarlos
+    # junto con el análisis (antes la alerta era solo un texto fijo en el
+    # video, sin decir dónde ni cuándo pasó).
+    zona_alerta = None
+    momento_alerta_seg = None
+
+    # FPS de procesamiento (cuadros/segundo reales que el servidor logra
+    # analizar, no el framerate del video). Antes solo se mostraba en
+    # Tiempo Real; acá se calcula igual, suavizado con media móvil.
+    tiempo_frame_anterior = time.perf_counter()
+    fps_procesamiento = 0.0
+
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
+
+            frame_h, frame_w = frame.shape[:2]
+            momento_actual_seg = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+
+            ahora = time.perf_counter()
+            dt = ahora - tiempo_frame_anterior
+            if dt > 0:
+                fps_instantaneo = 1.0 / dt
+                fps_procesamiento = (
+                    0.8 * fps_procesamiento + 0.2 * fps_instantaneo
+                    if fps_procesamiento > 0
+                    else fps_instantaneo
+                )
+            tiempo_frame_anterior = ahora
 
             personas = detectar_personas(frame, zonas)
 
@@ -229,7 +311,7 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
             grupo_mas_grande = obtener_grupo_mas_grande(grupos)
 
             # Nivel del frame actual (solo para mostrar en pantalla)
-            nivel_aglomeracion, color_aglomeracion = clasificar_aglomeracion(grupo_mas_grande)
+            nivel_aglomeracion, color_aglomeracion = clasificar_aglomeracion(grupo_mas_grande, umbral_medio, umbral_alto)
 
             personas_maximas = max(personas_maximas, len(personas))
             grupo_mayor_maximo = max(grupo_mayor_maximo, grupo_mas_grande)
@@ -242,6 +324,12 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
                 cv2.putText(frame, f"Preset: {preset_nombre}", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
+            # FPS de procesamiento, arriba a la derecha (mismo criterio que Tiempo Real)
+            texto_fps = f"FPS: {fps_procesamiento:.1f}"
+            (ancho_texto, _), _ = cv2.getTextSize(texto_fps, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.putText(frame, texto_fps, (frame_w - ancho_texto - 10, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+
             cv2.putText(frame, f"Personas detectadas: {len(personas)}", (10, 55),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Grupo mayor: {grupo_mas_grande}", (10, 85),
@@ -250,8 +338,22 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_aglomeracion, 2)
 
             if nivel_aglomeracion == "ALTO":
-                cv2.putText(frame, "ALERTA: AGLOMERACION DETECTADA", (10, 150),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                personas_grupo = obtener_personas_grupo_mas_grande(personas, grupos)
+                zona_actual = calcular_zona(personas_grupo, frame_w, frame_h)
+
+                # Solo se guarda la primera vez que aparece ALTO en el video.
+                if zona_alerta is None:
+                    zona_alerta = zona_actual
+                    momento_alerta_seg = momento_actual_seg
+
+                # cv2.putText solo soporta ASCII (los fonts Hershey no
+                # tienen glifos para "—" u otros caracteres Unicode), así
+                # que se usa un guion simple en vez de guion largo.
+                cv2.putText(
+                    frame,
+                    f"ALERTA: AGLOMERACION DETECTADA - Zona: {zona_actual} - Momento: {formatear_momento(momento_actual_seg)}",
+                    (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2
+                )
 
             ok, buffer = cv2.imencode(".jpg", frame)
             if not ok:
@@ -276,7 +378,7 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
             print(f"[WARN] No se pudo borrar {ruta_entrada}: {e}")
 
         # Calcular nivel final desde el pico real, no del último frame
-        nivel_final, _ = clasificar_aglomeracion(grupo_mayor_maximo)
+        nivel_final, _ = clasificar_aglomeracion(grupo_mayor_maximo, umbral_medio, umbral_alto)
 
         # Guardar el análisis en la base de datos
         try:
@@ -286,7 +388,9 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
                 grupo_mayor_maximo,
                 nivel_final,
                 user_id=user_id,
-                preset_id=preset_id
+                preset_id=preset_id,
+                zona_alerta=zona_alerta,
+                momento_alerta_seg=momento_alerta_seg
             )
         except Exception as e:
             print(f"[WARN] No se pudo guardar el análisis: {e}")

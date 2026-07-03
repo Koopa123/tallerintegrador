@@ -14,7 +14,8 @@ def obtener_conexion():
 # ANÁLISIS
 # ============================================================
 
-def guardar_analisis(nombre_video, personas_maximas, grupo_mayor_maximo, nivel_final, user_id, preset_id=None):
+def guardar_analisis(nombre_video, personas_maximas, grupo_mayor_maximo, nivel_final, user_id,
+                      preset_id=None, zona_alerta=None, momento_alerta_seg=None):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
@@ -25,16 +26,20 @@ def guardar_analisis(nombre_video, personas_maximas, grupo_mayor_maximo, nivel_f
                 grupo_mayor_maximo,
                 nivel_final,
                 preset_id,
-                user_id
+                user_id,
+                zona_alerta,
+                momento_alerta_seg
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             nombre_video,
             personas_maximas,
             grupo_mayor_maximo,
             nivel_final,
             preset_id,
-            user_id
+            user_id,
+            zona_alerta,
+            momento_alerta_seg
         ))
         conexion.commit()
     finally:
@@ -48,7 +53,7 @@ def listar_analisis(user_id):
     try:
         cursor.execute("""
             SELECT a.id, a.nombre_video, a.personas_maximas, a.grupo_mayor_maximo,
-                   a.nivel_final, a.fecha, p.nombre
+                   a.nivel_final, a.fecha, p.nombre, a.zona_alerta, a.momento_alerta_seg
             FROM analisis a
             LEFT JOIN presets p ON a.preset_id = p.id
             WHERE a.user_id = %s
@@ -87,7 +92,7 @@ def listar_presets(user_id):
     cursor = conexion.cursor()
     try:
         cursor.execute("""
-            SELECT id, nombre, frame_path, zonas, fecha_creacion
+            SELECT id, nombre, frame_path, zonas, fecha_creacion, umbral_medio, umbral_alto
             FROM presets
             WHERE user_id = %s
             ORDER BY fecha_creacion DESC
@@ -104,7 +109,7 @@ def obtener_preset(preset_id, user_id):
     cursor = conexion.cursor()
     try:
         cursor.execute("""
-            SELECT id, nombre, frame_path, zonas, fecha_creacion
+            SELECT id, nombre, frame_path, zonas, fecha_creacion, umbral_medio, umbral_alto
             FROM presets
             WHERE id = %s AND user_id = %s
         """, (preset_id, user_id))
@@ -124,7 +129,7 @@ def obtener_preset_publico(preset_id):
     cursor = conexion.cursor()
     try:
         cursor.execute("""
-            SELECT id, nombre, frame_path, zonas, fecha_creacion
+            SELECT id, nombre, frame_path, zonas, fecha_creacion, umbral_medio, umbral_alto
             FROM presets
             WHERE id = %s
         """, (preset_id,))
@@ -134,15 +139,15 @@ def obtener_preset_publico(preset_id):
         conexion.close()
 
 
-def actualizar_zonas_preset(preset_id, zonas, user_id):
+def actualizar_zonas_preset(preset_id, zonas, user_id, umbral_medio, umbral_alto):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
         cursor.execute("""
             UPDATE presets
-            SET zonas = %s
+            SET zonas = %s, umbral_medio = %s, umbral_alto = %s
             WHERE id = %s AND user_id = %s
-        """, (json.dumps(zonas), preset_id, user_id))
+        """, (json.dumps(zonas), umbral_medio, umbral_alto, preset_id, user_id))
         conexion.commit()
     finally:
         cursor.close()
@@ -184,10 +189,12 @@ def obtener_usuario_por_email(email):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
+        # Case-insensitive: cubre usuarios registrados antes de normalizar
+        # el email a minúsculas en /auth/registro.
         cursor.execute("""
             SELECT id, nombre, email, password_hash
             FROM usuarios
-            WHERE email = %s
+            WHERE LOWER(email) = LOWER(%s)
         """, (email,))
         return cursor.fetchone()  # (id, nombre, email, password_hash) o None
     finally:
