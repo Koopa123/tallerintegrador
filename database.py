@@ -67,6 +67,12 @@ def listar_analisis(user_id):
 
 # ============================================================
 # PRESETS DE ZONAS
+#
+# Los pasillos son un recurso COMPARTIDO, no privado por usuario: los
+# configura el administrador (único rol que puede crear/editar/borrar,
+# ver requerir_admin en auth.py) y cualquier vigilante logueado los usa
+# para monitorear. user_id se sigue guardando en la fila como metadato
+# de quién lo creó, pero ya no se usa para filtrar el acceso.
 # ============================================================
 
 def crear_preset(nombre, frame_path, zonas, user_id):
@@ -87,44 +93,22 @@ def crear_preset(nombre, frame_path, zonas, user_id):
         conexion.close()
 
 
-def listar_presets(user_id):
+def listar_presets():
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
         cursor.execute("""
             SELECT id, nombre, frame_path, zonas, fecha_creacion, umbral_medio, umbral_alto
             FROM presets
-            WHERE user_id = %s
             ORDER BY fecha_creacion DESC
-        """, (user_id,))
+        """)
         return cursor.fetchall()
     finally:
         cursor.close()
         conexion.close()
 
 
-def obtener_preset(preset_id, user_id):
-    """Devuelve el preset solo si pertenece a user_id (para rutas autenticadas)."""
-    conexion = obtener_conexion()
-    cursor = conexion.cursor()
-    try:
-        cursor.execute("""
-            SELECT id, nombre, frame_path, zonas, fecha_creacion, umbral_medio, umbral_alto
-            FROM presets
-            WHERE id = %s AND user_id = %s
-        """, (preset_id, user_id))
-        return cursor.fetchone()
-    finally:
-        cursor.close()
-        conexion.close()
-
-
-def obtener_preset_publico(preset_id):
-    """
-    Devuelve el preset sin filtrar por dueño. Uso exclusivo del endpoint
-    de frame (/presets/{id}/frame), que se carga como <img src> y por lo
-    tanto no puede mandar el header Authorization.
-    """
+def obtener_preset(preset_id):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
@@ -139,26 +123,26 @@ def obtener_preset_publico(preset_id):
         conexion.close()
 
 
-def actualizar_zonas_preset(preset_id, zonas, user_id, umbral_medio, umbral_alto):
+def actualizar_zonas_preset(preset_id, zonas, umbral_medio, umbral_alto):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
         cursor.execute("""
             UPDATE presets
             SET zonas = %s, umbral_medio = %s, umbral_alto = %s
-            WHERE id = %s AND user_id = %s
-        """, (json.dumps(zonas), umbral_medio, umbral_alto, preset_id, user_id))
+            WHERE id = %s
+        """, (json.dumps(zonas), umbral_medio, umbral_alto, preset_id))
         conexion.commit()
     finally:
         cursor.close()
         conexion.close()
 
 
-def eliminar_preset(preset_id, user_id):
+def eliminar_preset(preset_id):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
-        cursor.execute("DELETE FROM presets WHERE id = %s AND user_id = %s", (preset_id, user_id))
+        cursor.execute("DELETE FROM presets WHERE id = %s", (preset_id,))
         conexion.commit()
     finally:
         cursor.close()
@@ -168,18 +152,24 @@ def eliminar_preset(preset_id, user_id):
 # USUARIOS
 # ============================================================
 
-def crear_usuario(nombre, email, password_hash):
+def crear_usuario(nombre, email, password_hash, rol="vigilante"):
+    """
+    rol por defecto es "vigilante": el registro público (/auth/registro)
+    nunca pasa un rol distinto. La cuenta de administrador se crea aparte,
+    con crear_admin.py, para que no sea posible autoasignarse el rol
+    desde el formulario de registro normal.
+    """
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     try:
         cursor.execute("""
-            INSERT INTO usuarios (nombre, email, password_hash)
-            VALUES (%s, %s, %s)
-            RETURNING id, nombre, email
-        """, (nombre, email, password_hash))
+            INSERT INTO usuarios (nombre, email, password_hash, rol)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, nombre, email, rol
+        """, (nombre, email, password_hash, rol))
         usuario = cursor.fetchone()
         conexion.commit()
-        return usuario  # (id, nombre, email)
+        return usuario  # (id, nombre, email, rol)
     finally:
         cursor.close()
         conexion.close()
@@ -192,11 +182,11 @@ def obtener_usuario_por_email(email):
         # Case-insensitive: cubre usuarios registrados antes de normalizar
         # el email a minúsculas en /auth/registro.
         cursor.execute("""
-            SELECT id, nombre, email, password_hash
+            SELECT id, nombre, email, password_hash, rol
             FROM usuarios
             WHERE LOWER(email) = LOWER(%s)
         """, (email,))
-        return cursor.fetchone()  # (id, nombre, email, password_hash) o None
+        return cursor.fetchone()  # (id, nombre, email, password_hash, rol) o None
     finally:
         cursor.close()
         conexion.close()

@@ -27,10 +27,11 @@ def verificar_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
 
 
-def crear_token(user_id: int, email: str) -> str:
+def crear_token(user_id: int, email: str, rol: str) -> str:
     payload = {
         "sub": str(user_id),
         "email": email,
+        "rol": rol,
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -52,6 +53,19 @@ def requerir_auth(
     Swagger muestra el botón Authorize gracias a HTTPBearer.
     """
     return verificar_token(credentials.credentials)
+
+
+def requerir_admin(
+    payload: dict = Depends(requerir_auth)
+) -> dict:
+    """
+    Igual que requerir_auth, pero además exige rol "administrador" en el
+    token. El rol viaja en el JWT (se fija al loguear/registrar), así que
+    esto no necesita otra consulta a la base de datos.
+    """
+    if payload.get("rol") != "administrador":
+        raise HTTPException(403, "Esta acción requiere una cuenta de administrador")
+    return payload
 
 
 STREAM_TOKEN_EXPIRE_MINUTOS = 5

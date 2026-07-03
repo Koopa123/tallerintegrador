@@ -3,7 +3,6 @@ from database import (
     crear_preset,
     listar_presets,
     obtener_preset,
-    obtener_preset_publico,
     actualizar_zonas_preset,
     eliminar_preset,
     crear_usuario,
@@ -14,6 +13,7 @@ from auth import (
     verificar_password,
     crear_token,
     requerir_auth,
+    requerir_admin,
     crear_token_stream,
     verificar_token_stream,
 )
@@ -153,12 +153,12 @@ def registro(data: RegistroRequest):
     except Exception as e:
         raise HTTPException(500, f"Error creando usuario: {str(e)}")
 
-    user_id, nombre, email = usuario
-    token = crear_token(user_id, email)
+    user_id, nombre, email, rol = usuario
+    token = crear_token(user_id, email, rol)
 
     return {
         "token": token,
-        "usuario": {"id": user_id, "nombre": nombre, "email": email}
+        "usuario": {"id": user_id, "nombre": nombre, "email": email, "rol": rol}
     }
 
 
@@ -168,16 +168,16 @@ def login(data: LoginRequest):
     if not usuario:
         raise HTTPException(401, "Email o contraseña incorrectos")
 
-    user_id, nombre, email, password_hash = usuario
+    user_id, nombre, email, password_hash, rol = usuario
 
     if not verificar_password(data.password, password_hash):
         raise HTTPException(401, "Email o contraseña incorrectos")
 
-    token = crear_token(user_id, email)
+    token = crear_token(user_id, email, rol)
 
     return {
         "token": token,
-        "usuario": {"id": user_id, "nombre": nombre, "email": email}
+        "usuario": {"id": user_id, "nombre": nombre, "email": email, "rol": rol}
     }
 
 
@@ -187,6 +187,7 @@ def yo(payload: dict = Depends(requerir_auth)):
     return {
         "id": int(payload["sub"]),
         "email": payload["email"],
+        "rol": payload.get("rol", "vigilante"),
     }
 
 
@@ -198,7 +199,7 @@ def yo(payload: dict = Depends(requerir_auth)):
 def crear_preset_endpoint(
     nombre: str = Form(...),
     file: UploadFile = File(...),   # ← ya viene como imagen (frame extraído en el navegador)
-    payload: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_admin)   # ← solo administrador (HU-3.1)
 ):
     nombre = nombre.strip()
     if not nombre:
@@ -240,9 +241,9 @@ def crear_preset_endpoint(
 
 @app.get("/presets")
 def listar_presets_endpoint(
-    payload: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← cualquier vigilante logueado
 ):
-    presets = listar_presets(user_id=int(payload["sub"]))
+    presets = listar_presets()
     return {
         "presets": [
             {
@@ -262,9 +263,9 @@ def listar_presets_endpoint(
 @app.get("/presets/{preset_id}")
 def obtener_preset_endpoint(
     preset_id: int,
-    payload: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_auth)   # ← cualquier vigilante logueado
 ):
-    preset = obtener_preset(preset_id, user_id=int(payload["sub"]))
+    preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -283,15 +284,14 @@ def obtener_preset_endpoint(
 def actualizar_zonas_endpoint(
     preset_id: int,
     data: ZonasRequest,
-    payload: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_admin)   # ← solo administrador (HU-3.1)
 ):
-    user_id = int(payload["sub"])
-    preset = obtener_preset(preset_id, user_id=user_id)
+    preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
     actualizar_zonas_preset(
-        preset_id, data.zonas, user_id=user_id,
+        preset_id, data.zonas,
         umbral_medio=data.umbral_medio, umbral_alto=data.umbral_alto
     )
     return {
@@ -305,10 +305,9 @@ def actualizar_zonas_endpoint(
 @app.delete("/presets/{preset_id}")
 def eliminar_preset_endpoint(
     preset_id: int,
-    payload: dict = Depends(requerir_auth)   # ← protegido
+    payload: dict = Depends(requerir_admin)   # ← solo administrador (HU-3.1)
 ):
-    user_id = int(payload["sub"])
-    preset = obtener_preset(preset_id, user_id=user_id)
+    preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -316,14 +315,14 @@ def eliminar_preset_endpoint(
     if os.path.exists(ruta_frame):
         os.remove(ruta_frame)
 
-    eliminar_preset(preset_id, user_id=user_id)
+    eliminar_preset(preset_id)
     return {"mensaje": "Preset eliminado"}
 
 
 @app.get("/presets/{preset_id}/frame")
 def obtener_frame_preset(preset_id: int):
     # ← SIN proteger (se carga como <img src>, no acepta headers)
-    preset = obtener_preset_publico(preset_id)
+    preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -344,7 +343,7 @@ def iniciar_analisis(
     payload: dict = Depends(requerir_auth)   # ← protegido
 ):
     user_id = int(payload["sub"])
-    preset = obtener_preset(preset_id, user_id=user_id)
+    preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
@@ -384,7 +383,7 @@ def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_origin
     payload_stream = verificar_token_stream(token, nombre_video, preset_id)
     user_id = int(payload_stream["sub"])
 
-    preset = obtener_preset(preset_id, user_id=user_id)
+    preset = obtener_preset(preset_id)
     if not preset:
         raise HTTPException(status_code=404, detail="Preset no encontrado")
 
