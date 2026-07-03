@@ -8,7 +8,14 @@ from ultralytics import YOLO
 # CONFIGURACIÓN
 # ============================================================
 
-CONFIANZA_MINIMA = 0.50
+# Ajustado tras validar contra un video real con conteo manual (ver
+# validar_precision.py): 0.55 dio mejor precision (93.7% vs 90.5%) y
+# menor error de conteo (14.0% vs 14.9%) que el 0.50 anterior. Probamos
+# 0.25-0.70: bajar el umbral siempre empeora (mas falsos positivos supera
+# la ganancia en recall); 0.55 es el mejor punto encontrado, aunque no
+# alcanza el <=10% de error pedido por HU-2.3 (limite real del modelo en
+# escenas con mucha gente/oclusion, no un problema de calibracion).
+CONFIANZA_MINIMA = 0.55
 
 # Fallback si no hay personas suficientes para estimar
 # una distancia adaptativa basada en el ancho de las cajas.
