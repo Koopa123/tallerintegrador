@@ -8,3 +8,5 @@ frames_referencia/
 venv/
 validacion/muestra/
 validacion/resultados_muestra.csv
+validacion/muestra_densidad/
+validacion/resultados_densidad.csv

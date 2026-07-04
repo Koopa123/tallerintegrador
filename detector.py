@@ -8,14 +8,25 @@ from ultralytics import YOLO
 # CONFIGURACIÓN
 # ============================================================
 
-# Ajustado tras validar contra un video real con conteo manual (ver
-# validar_precision.py): 0.55 dio mejor precision (93.7% vs 90.5%) y
-# menor error de conteo (14.0% vs 14.9%) que el 0.50 anterior. Probamos
-# 0.25-0.70: bajar el umbral siempre empeora (mas falsos positivos supera
-# la ganancia en recall); 0.55 es el mejor punto encontrado, aunque no
-# alcanza el <=10% de error pedido por HU-2.3 (limite real del modelo en
-# escenas con mucha gente/oclusion, no un problema de calibracion).
-CONFIANZA_MINIMA = 0.55
+# Se probo cambiar YOLOv8s por modelos mas pesados (YOLOv8m, YOLOv8l) para
+# ver si mejoraban el error de conteo (HU-2.3) y la exactitud de
+# clasificacion de densidad (validar_densidad.py, que dio solo 46.2% con
+# YOLOv8s+0.55). YOLOv8l no mejora sobre YOLOv8m (no es "mientras mas
+# pesado, mejor"); YOLOv8m es el mejor punto de los tres. Con YOLOv8m se
+# volvio a barrer el umbral (0.20-0.70): valores bajos (<=0.30) dan
+# "100% de exactitud de densidad" pero es un artefacto -- las 26 muestras
+# de validacion son todas nivel ALTO, asi que cualquier umbral que
+# sobre-detecte (mas falsos positivos, ver precision/error de conteo en
+# esa misma fila) termina clasificando ALTO por pura casualidad, no
+# porque distinga bien los niveles. Ignorando esos puntos degenerados,
+# 0.60 es el mejor real: mejor F1 (0.94) y mejor error de conteo (13.4%)
+# de todo el experimento (incluyendo el YOLOv8s+0.55 anterior), y
+# exactitud de densidad 80.8% (vs 46.2% antes). Costo de velocidad
+# despreciable en GPU (~9ms -> ~13ms por frame, muy lejos del limite de
+# 100ms). Sigue sin alcanzar el <=10% de error de conteo (HU-2.3) ni el
+# >=85% de exactitud de densidad del Project Charter -- limite real del
+# modelo en escenas con oclusion, no arreglado del todo, pero mejorado.
+CONFIANZA_MINIMA = 0.60
 
 # Fallback si no hay personas suficientes para estimar
 # una distancia adaptativa basada en el ancho de las cajas.
@@ -39,7 +50,10 @@ UMBRAL_ALTO = 6    # 6 o más → ALTO
 # ============================================================
 
 def cargar_modelo():
-    return YOLO("yolov8s.pt")
+    # YOLOv8m en vez de YOLOv8s (ver nota de CONFIANZA_MINIMA mas arriba):
+    # mejora F1, error de conteo y exactitud de densidad, a costo de
+    # velocidad despreciable en GPU.
+    return YOLO("yolov8m.pt")
 
 
 modelo = cargar_modelo()

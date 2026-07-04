@@ -46,10 +46,19 @@ CARPETA_VALIDACION = "validacion"
 CARPETA_MUESTRA = os.path.join(CARPETA_VALIDACION, "muestra")
 CSV_RESULTADOS = os.path.join(CARPETA_VALIDACION, "resultados_muestra.csv")
 
+# Se probo tambien con las zonas ignoradas del preset real "pasillo c" (id 5,
+# el pasillo de este video): tapan los maniquies de las vitrinas, pero al ser
+# rectangulos fijos pegados al borde del pasillo, tambien tapan clientes
+# reales que caminan por esa misma franja (Recall cayo de 92.9% a 41.4%,
+# Error de conteo subio de 13.7% a 58.1%). Esa zona en particular esta mal
+# dibujada para este proposito, asi que se valida sin zonas (zonas=[]),
+# midiendo el detector puro en vez de una configuracion de preset puntual.
 VENTANA_MUESTREO_SEG = 1.5  # cada cuantos segundos de video se toma un frame de muestra
 
 # Umbrales que definen las historias de usuario a validar
 UMBRAL_PRECISION_MIN = 0.85   # HU-2.1 CA3: precision >= 85%
+UMBRAL_RECALL_MIN = 0.80      # Project Charter, objetivo especifico 1: recall >= 80%
+UMBRAL_F1_MIN = 0.82          # Project Charter, objetivo especifico 1: F1-Score >= 0.82
 UMBRAL_ERROR_CONTEO_MAX = 0.10  # HU-2.3 CA3: error de conteo <= 10%
 UMBRAL_TIEMPO_MS_MAX = 100    # HU-6.2 CA1: <=100ms por frame
 
@@ -175,6 +184,7 @@ def calcular_metricas():
 
     precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
     recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
     error_conteo_promedio = sum(errores_pct) / len(errores_pct) if errores_pct else 0
     tiempo_promedio_ms = sum(tiempos_ms) / len(tiempos_ms)
     tiempo_max_ms = max(tiempos_ms)
@@ -190,6 +200,14 @@ def calcular_metricas():
     print(f"  TP={total_tp}  FP={total_fp}  FN={total_fn}")
     print(f"  Precision estimada: {precision:.1%}  Recall estimado: {recall:.1%}")
     print(f"  -> {verdicto(precision >= UMBRAL_PRECISION_MIN)}")
+
+    print(f"\nProject Charter - Recall >= {UMBRAL_RECALL_MIN:.0%}")
+    print(f"  Recall estimado: {recall:.1%}")
+    print(f"  -> {verdicto(recall >= UMBRAL_RECALL_MIN)}")
+
+    print(f"\nProject Charter - F1-Score >= {UMBRAL_F1_MIN:.2f}")
+    print(f"  F1-Score estimado: {f1_score:.2f}  (a partir de precision/recall aproximados de arriba)")
+    print(f"  -> {verdicto(f1_score >= UMBRAL_F1_MIN)}")
 
     print(f"\nHU-2.3 CA3 - Error de conteo <= {UMBRAL_ERROR_CONTEO_MAX:.0%}")
     print(f"  Error promedio: {error_conteo_promedio:.1%}")
