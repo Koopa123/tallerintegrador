@@ -6,6 +6,7 @@ videos_entrada/
 videos_salida/
 frames_referencia/
 venv/
+validacion/
 validacion/muestra/
 validacion/resultados_muestra.csv
 validacion/muestra_densidad/

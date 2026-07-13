@@ -45,6 +45,14 @@ FACTOR_DISTANCIA_AGRUPACION = 1.5
 UMBRAL_MEDIO = 4   # a partir de 4 personas → MEDIO
 UMBRAL_ALTO = 6    # 6 o más → ALTO
 
+# Streams de análisis en curso, para poder detenerlos desde el botón
+# "Detener" del frontend (antes la única forma de salir era matar el
+# proceso del backend). Se indexan por el nombre físico único del video
+# (el mismo que viaja en la URL del stream), no por el nombre "de
+# exhibición" que se usa para guardar en la BD.
+STREAMS_ACTIVOS = {}    # nombre_fisico -> user_id
+STREAMS_CANCELADOS = set()  # nombres marcados para detener
+
 # ============================================================
 # CARGA DEL MODELO
 # ============================================================
@@ -288,6 +296,10 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
     if not cap.isOpened():
         raise Exception("No se pudo abrir el video.")
 
+    nombre_fisico = os.path.basename(ruta_entrada)
+    STREAMS_ACTIVOS[nombre_fisico] = user_id
+    detenido_manualmente = False
+
     personas_maximas = 0
     grupo_mayor_maximo = 0
 
@@ -305,6 +317,10 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
 
     try:
         while True:
+            if nombre_fisico in STREAMS_CANCELADOS:
+                detenido_manualmente = True
+                break
+
             ret, frame = cap.read()
             if not ret:
                 break
@@ -390,6 +406,8 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
             )
     finally:
         cap.release()
+        STREAMS_ACTIVOS.pop(nombre_fisico, None)
+        STREAMS_CANCELADOS.discard(nombre_fisico)
 
         # Borrar el video después de procesarlo (ya no se necesita)
         try:
@@ -397,6 +415,12 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
                 os.remove(ruta_entrada)
         except Exception as e:
             print(f"[WARN] No se pudo borrar {ruta_entrada}: {e}")
+
+        # Si el usuario lo detuvo a mano, el análisis quedó incompleto:
+        # no se guarda, para no ensuciar el historial ni las métricas de
+        # validación con conteos parciales que no representan el video.
+        if detenido_manualmente:
+            return
 
         # Calcular nivel final desde el pico real, no del último frame
         nivel_final, _ = clasificar_aglomeracion(grupo_mayor_maximo, umbral_medio, umbral_alto)

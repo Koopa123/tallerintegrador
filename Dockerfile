@@ -21,4 +21,8 @@ RUN mkdir -p videos_entrada videos_salida frames_referencia
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Forma shell (no exec/JSON) a propósito: Railway inyecta el puerto real
+# en la variable $PORT en tiempo de ejecución, y solo la forma shell
+# expande variables de entorno en el CMD. El fallback a 8000 es para
+# correr el contenedor en local sin definir PORT.
+CMD uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}

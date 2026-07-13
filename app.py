@@ -32,7 +32,7 @@ import uuid
 from database import crear_usuario, obtener_usuario_por_email
 from psycopg2.errors import UniqueViolation
 
-from detector import generar_stream_video
+from detector import generar_stream_video, STREAMS_ACTIVOS, STREAMS_CANCELADOS
 
 app = FastAPI()
 
@@ -368,8 +368,27 @@ def iniciar_analisis(
     return {
         "mensaje": "Video subido, iniciando análisis",
         "nombre_video": file.filename,
+        "video_id": nombre_unico,
         "stream_url": f"/analisis/stream/{nombre_unico}?preset_id={preset_id}&nombre_original={file.filename}&token={token_stream}"
     }
+
+
+@app.post("/analisis/stream/{nombre_video}/detener")
+def detener_stream_analisis(nombre_video: str, payload: dict = Depends(requerir_auth)):
+    # Autenticado con Bearer normal (no con el token de un solo uso del
+    # stream): esta llamada la hace el botón "Detener" del frontend, que
+    # sí tiene el Bearer a mano, a diferencia del <img src>/stream.
+    nombre_video = Path(nombre_video).name
+    user_id = int(payload["sub"])
+
+    dueño = STREAMS_ACTIVOS.get(nombre_video)
+    if dueño is None:
+        return {"mensaje": "El stream ya no está activo"}
+    if dueño != user_id:
+        raise HTTPException(status_code=403, detail="No autorizado para detener este análisis")
+
+    STREAMS_CANCELADOS.add(nombre_video)
+    return {"mensaje": "Solicitud de detener enviada"}
 
 
 @app.get("/analisis/stream/{nombre_video}")
