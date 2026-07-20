@@ -38,9 +38,12 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://mi-app-frontend-olive.vercel.app",
+    ],
     # La autenticación es 100% por Bearer token, no por cookies, así que no
-    # hace falta allow_credentials (y combinarlo con origin "*" es una
+    # hace falta allow_credentials (y combinarlo con origin abierto era una
     # bandera típica de escáneres de seguridad sin beneficio real acá).
     allow_credentials=False,
     allow_methods=["*"],
