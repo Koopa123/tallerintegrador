@@ -116,7 +116,7 @@ def limpiar_carpeta(carpeta, max_archivos=5):
         os.remove(archivo_antiguo)
 
 
-@app.get("/")
+@app.get("/", tags=["inicio"])
 def inicio():
     return {"mensaje": "API de detección de aglomeraciones funcionando"}
 
@@ -124,7 +124,7 @@ def inicio():
 # AUTENTICACIÓN
 # ============================================================
 
-@app.post("/auth/registro")
+@app.post("/auth/registro", tags=["auth"])
 def registro(data: RegistroRequest):
     nombre = data.nombre.strip()
     email = data.email.strip().lower()
@@ -162,7 +162,7 @@ def registro(data: RegistroRequest):
     }
 
 
-@app.post("/auth/login")
+@app.post("/auth/login", tags=["auth"])
 def login(data: LoginRequest):
     usuario = obtener_usuario_por_email(data.email.strip().lower())
     if not usuario:
@@ -181,7 +181,7 @@ def login(data: LoginRequest):
     }
 
 
-@app.get("/auth/me")
+@app.get("/auth/me", tags=["auth"])
 def yo(payload: dict = Depends(requerir_auth)):
     """Endpoint para que el frontend valide si el token sigue siendo válido."""
     return {
@@ -195,7 +195,7 @@ def yo(payload: dict = Depends(requerir_auth)):
 # PRESETS
 # ============================================================
 
-@app.post("/presets")
+@app.post("/presets", tags=["presets"])
 def crear_preset_endpoint(
     nombre: str = Form(...),
     file: UploadFile = File(...),   # ← ya viene como imagen (frame extraído en el navegador)
@@ -239,7 +239,7 @@ def crear_preset_endpoint(
     }
 
 
-@app.get("/presets")
+@app.get("/presets", tags=["presets"])
 def listar_presets_endpoint(
     payload: dict = Depends(requerir_auth)   # ← cualquier vigilante logueado
 ):
@@ -260,7 +260,7 @@ def listar_presets_endpoint(
     }
 
 
-@app.get("/presets/{preset_id}")
+@app.get("/presets/{preset_id}", tags=["presets"])
 def obtener_preset_endpoint(
     preset_id: int,
     payload: dict = Depends(requerir_auth)   # ← cualquier vigilante logueado
@@ -280,7 +280,7 @@ def obtener_preset_endpoint(
     }
 
 
-@app.put("/presets/{preset_id}/zonas")
+@app.put("/presets/{preset_id}/zonas", tags=["presets"])
 def actualizar_zonas_endpoint(
     preset_id: int,
     data: ZonasRequest,
@@ -302,7 +302,7 @@ def actualizar_zonas_endpoint(
     }
 
 
-@app.delete("/presets/{preset_id}")
+@app.delete("/presets/{preset_id}", tags=["presets"])
 def eliminar_preset_endpoint(
     preset_id: int,
     payload: dict = Depends(requerir_admin)   # ← solo administrador (HU-3.1)
@@ -319,7 +319,7 @@ def eliminar_preset_endpoint(
     return {"mensaje": "Preset eliminado"}
 
 
-@app.get("/presets/{preset_id}/frame")
+@app.get("/presets/{preset_id}/frame", tags=["presets"])
 def obtener_frame_preset(preset_id: int):
     # ← SIN proteger (se carga como <img src>, no acepta headers)
     preset = obtener_preset(preset_id)
@@ -336,7 +336,7 @@ def obtener_frame_preset(preset_id: int):
 # ANÁLISIS
 # ============================================================
 
-@app.post("/analisis")
+@app.post("/analisis", tags=["analisis"])
 def iniciar_analisis(
     preset_id: int = Form(...),
     file: UploadFile = File(...),
@@ -373,7 +373,7 @@ def iniciar_analisis(
     }
 
 
-@app.post("/analisis/stream/{nombre_video}/detener")
+@app.post("/analisis/stream/{nombre_video}/detener", tags=["analisis"])
 def detener_stream_analisis(nombre_video: str, payload: dict = Depends(requerir_auth)):
     # Autenticado con Bearer normal (no con el token de un solo uso del
     # stream): esta llamada la hace el botón "Detener" del frontend, que
@@ -391,7 +391,7 @@ def detener_stream_analisis(nombre_video: str, payload: dict = Depends(requerir_
     return {"mensaje": "Solicitud de detener enviada"}
 
 
-@app.get("/analisis/stream/{nombre_video}")
+@app.get("/analisis/stream/{nombre_video}", tags=["analisis"])
 def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_original: str = None):
     # nombre_video viene de la URL: se sanea para evitar path traversal.
     nombre_video = Path(nombre_video).name
@@ -430,7 +430,7 @@ def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_origin
     )
 
 
-@app.get("/analisis")
+@app.get("/analisis", tags=["analisis"])
 def listar_analisis_endpoint(
     payload: dict = Depends(requerir_auth)   # ← protegido
 ):
