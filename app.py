@@ -49,7 +49,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+#prueba
 CARPETA_VIDEOS = "videos_entrada"
 CARPETA_FRAMES = "frames_referencia"
 EXTENSIONES_VIDEO_VALIDAS = {".mp4", ".avi", ".mov", ".mkv"}
