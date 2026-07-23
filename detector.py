@@ -287,7 +287,8 @@ def dibujar_grupos(frame, personas, grupos, distancia_umbral):
 # ============================================================
 
 def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_id=None, preset_nombre=None,
-                          user_id=None, umbral_medio=UMBRAL_MEDIO, umbral_alto=UMBRAL_ALTO):
+                          user_id=None, umbral_medio=UMBRAL_MEDIO, umbral_alto=UMBRAL_ALTO,
+                          ancho_referencia=None, alto_referencia=None):
     from database import guardar_analisis
 
     zonas = zonas or []
@@ -295,6 +296,25 @@ def generar_stream_video(ruta_entrada, nombre_video="video", zonas=None, preset_
     cap = cv2.VideoCapture(ruta_entrada)
     if not cap.isOpened():
         raise Exception("No se pudo abrir el video.")
+
+    # Las zonas se dibujaron y se guardaron en píxeles absolutos del frame
+    # de referencia del pasillo (el que se extrajo al crearlo). El video
+    # que se analiza ahora puede tener otra resolución, así que hay que
+    # reescalar las zonas a la resolución real de este video antes de
+    # usarlas — si no, quedan corridas respecto a lo que se dibujó.
+    if zonas and ancho_referencia and alto_referencia:
+        ancho_video = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        alto_video = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        if ancho_video and alto_video:
+            escala_x = ancho_video / ancho_referencia
+            escala_y = alto_video / alto_referencia
+            zonas = [
+                (
+                    int(zx1 * escala_x), int(zy1 * escala_y),
+                    int(zx2 * escala_x), int(zy2 * escala_y),
+                )
+                for zx1, zy1, zx2, zy2 in zonas
+            ]
 
     nombre_fisico = os.path.basename(ruta_entrada)
     STREAMS_ACTIVOS[nombre_fisico] = user_id

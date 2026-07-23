@@ -227,10 +227,14 @@ def crear_preset_endpoint(
 
     try:
         preset_id = crear_preset(nombre=nombre, frame_path=nombre_frame, zonas=[], user_id=user_id)
+    except UniqueViolation:
+        if os.path.exists(ruta_frame):
+            os.remove(ruta_frame)
+        raise HTTPException(status_code=409, detail="Ya existe un pasillo con ese nombre")
     except Exception as e:
         if os.path.exists(ruta_frame):
             os.remove(ruta_frame)
-        raise HTTPException(status_code=400, detail=f"Error al crear preset (¿nombre duplicado?): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al crear preset: {str(e)}")
 
     return {
         "id": preset_id,
@@ -418,6 +422,15 @@ def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_origin
     umbral_medio = preset[5]
     umbral_alto = preset[6]
 
+    # Las zonas se dibujaron sobre este frame de referencia: sus dimensiones
+    # son la base para reescalar las zonas a la resolución real del video
+    # que se va a analizar (ver comentario en generar_stream_video).
+    ancho_referencia = alto_referencia = None
+    ruta_frame_referencia = os.path.join(CARPETA_FRAMES, preset[2])
+    frame_referencia = cv2.imread(ruta_frame_referencia)
+    if frame_referencia is not None:
+        alto_referencia, ancho_referencia = frame_referencia.shape[:2]
+
     return StreamingResponse(
         generar_stream_video(
             ruta_video,
@@ -428,6 +441,8 @@ def stream_analisis(nombre_video: str, preset_id: int, token: str, nombre_origin
             user_id=user_id,
             umbral_medio=umbral_medio,
             umbral_alto=umbral_alto,
+            ancho_referencia=ancho_referencia,
+            alto_referencia=alto_referencia,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
