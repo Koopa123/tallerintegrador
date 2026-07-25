@@ -42,6 +42,11 @@ app.add_middleware(
         "http://localhost:5173",
         "https://mi-app-frontend-olive.vercel.app",
     ],
+    # Cubre ademas cualquier URL de preview/branch que Vercel genere para
+    # este mismo proyecto (ej. mi-app-frontend-git-main-johan-s-projects10
+    # .vercel.app), que cambian de nombre y no se pueden listar a mano una
+    # por una en allow_origins.
+    allow_origin_regex=r"https://mi-app-frontend(-[a-z0-9]+)*-johan-s-projects10\.vercel\.app",
     # La autenticación es 100% por Bearer token, no por cookies, así que no
     # hace falta allow_credentials (y combinarlo con origin abierto era una
     # bandera típica de escáneres de seguridad sin beneficio real acá).
